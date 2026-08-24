@@ -186,6 +186,27 @@ def main():
         ok &= check("brief points at the schema, not the whole wiki", "CLAUDE.md" in brief)
         ok &= check("brief stays near the budget", est_tokens(brief) < 3000 * 2, est_tokens(brief))
 
+    # --- block-page detection -------------------------------------------
+    from rhkb.fetch import FetchError, _reject_block_page
+
+    def rejects(html, label):
+        try:
+            _reject_block_page(html, "https://example.invalid/x")
+            return False
+        except FetchError:
+            return True
+
+    ok &= check("proxy block page is rejected",
+                rejects("<html><body><pre>Host not in allowlist: docs.redhat.com. "
+                        "Add this host to your network egress settings.</pre></body></html>", "proxy"))
+    ok &= check("CDN challenge page is rejected",
+                rejects("<html><title>Attention Required</title><body>"
+                        + "Checking your browser before accessing. " * 60 + "</body></html>", "cdn"))
+    ok &= check("a suspiciously short page is rejected", rejects("<html><body>hi</body></html>", "short"))
+    ok &= check("a real page passes", not rejects(
+        "<html><body><article><h1>Serving models</h1>" + ("<p>Real documentation text. </p>" * 80)
+        + "</article></body></html>", "real"))
+
     # --- catalog ----------------------------------------------------------
     catalog = load_catalog(ROOT / "sources.yaml")
     ok &= check("catalog parses", len(catalog.sources) > 10, len(catalog.sources))

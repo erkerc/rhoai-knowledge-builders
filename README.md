@@ -96,6 +96,22 @@ carries frontmatter recording product, version, source URL and — for repos —
 
 Keep using `rhoai-docsync` for PDFs. Different artifact, different job.
 
+## When fetching is refused (403)
+
+`docs.redhat.com` sits behind a CDN that sometimes rejects scripted clients. rhkb sends a
+full browser header set, and on a 403 it opens the site once in headless Chrome, copies the
+clearance cookies into the HTTP session and retries — after which normal requests work.
+
+```bash
+pip install playwright && playwright install chromium   # then re-run rhkb fetch
+```
+
+`--browser-fallback off` disables the escalation; `--browser-engine selenium` picks the
+other backend. If the interception is your own network rather than the CDN — a corporate
+proxy or TLS-inspecting gateway — rhkb says so explicitly instead of writing empty
+documents, and `export HTTPS_PROXY=...` is the fix. Repo sources go over git and are
+unaffected either way.
+
 ## Layout
 
 ```

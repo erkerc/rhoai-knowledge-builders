@@ -41,6 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("-s", "--source", action="append", metavar="ID",
                         help="source id, tier (core/platform/upstream/extra), 'docs', 'repo', "
                              "'all' or 'enabled' (repeatable, comma-separated)")
+    common.add_argument("--browser-fallback", choices=("auto", "off"), default="auto",
+                        help="when docs.redhat.com refuses a request (403), warm up in a "
+                             "headless browser and retry (default: auto)")
+    common.add_argument("--browser-engine", choices=("auto", "playwright", "selenium"), default="auto")
     common.add_argument("-v", "--verbose", action="count", default=0)
     common.add_argument("-q", "--quiet", action="store_true")
 
@@ -165,6 +169,8 @@ def cmd_fetch(args) -> int:
     raw = raw_dir(args)
     raw.mkdir(parents=True, exist_ok=True)
     sess = session()
+    sess.rhkb_fallback = getattr(args, "browser_fallback", "auto")
+    sess.rhkb_engine = getattr(args, "browser_engine", "auto")
     total, failures = 0, []
     for source in sources:
         try:
@@ -178,9 +184,17 @@ def cmd_fetch(args) -> int:
             LOG.debug("", exc_info=True)
             failures.append(source.id)
 
+    browser = getattr(sess, "rhkb_browser", None)
+    if browser:
+        browser.stop()
+
     print(f"\n{total} file(s) under {raw}")
     if failures:
         print(f"failed: {', '.join(failures)}")
+        if any(getattr(catalog.by_id(f), "type", "") == "redhat-docs" for f in failures):
+            print("\nif those were 403s, docs.redhat.com is refusing scripted clients:")
+            print("  pip install playwright && playwright install chromium   # then re-run")
+            print("  behind a corporate proxy, export HTTPS_PROXY first")
     return 2 if failures else 0
 
 

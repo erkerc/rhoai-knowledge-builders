@@ -22,8 +22,10 @@ from .html2md import make_soup, page_title, to_markdown
 from .util import LOG, est_tokens, frontmatter, sha256_text, slug, write_atomic
 
 DOC_ROOT = "https://docs.redhat.com/en/documentation"
-UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/126.0.0.0 Safari/537.36")
+#: Statuses that mean "you look like a bot", not "this does not exist".
+BLOCKED = (401, 403, 406, 429)
 GUIDE_RE = re.compile(
     r"/documentation/(?P<product>[a-z0-9_.\-]+)/(?P<version>[^/#?]+)/html(?:-single)?/(?P<slug>[^/#?]+)",
     re.IGNORECASE,
@@ -40,20 +42,95 @@ def session() -> requests.Session:
     sess = requests.Session()
     sess.headers.update({
         "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Chromium";v="126", "Google Chrome";v="126", "Not:A-Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "Connection": "keep-alive",
     })
+    sess.rhkb_browser = None          # type: ignore[attr-defined]
+    sess.rhkb_fallback = "auto"       # type: ignore[attr-defined]
+    sess.rhkb_engine = "auto"         # type: ignore[attr-defined]
     return sess
+
+
+def get_html(sess: requests.Session, url: str, timeout: int = 60) -> str:
+    """GET a page, escalating to a headless browser if the CDN refuses us.
+
+    The escalation happens once per session: the browser's cookies and UA are
+    copied into the session, so subsequent requests go back over plain HTTP.
+    """
+    resp = sess.get(url, timeout=timeout)
+    if resp.status_code < 400:
+        return resp.text
+
+    if resp.status_code not in BLOCKED or getattr(sess, "rhkb_fallback", "auto") == "off":
+        raise FetchError(f"HTTP {resp.status_code} for {url}")
+
+    browser = getattr(sess, "rhkb_browser", None)
+    if browser is None:
+        from .browser import warm_up
+        browser = warm_up(sess, url, engine=getattr(sess, "rhkb_engine", "auto"))
+        sess.rhkb_browser = browser or False   # type: ignore[attr-defined]
+    if not browser:
+        raise FetchError(
+            f"HTTP {resp.status_code} for {url} - blocked, and no headless browser to fall back on"
+        )
+
+    retry = sess.get(url, timeout=timeout)
+    if retry.status_code < 400:
+        return retry.text
+
+    try:                      # still refused: read it out of the browser itself
+        html = browser.html(url)
+    except Exception as exc:
+        raise FetchError(f"HTTP {retry.status_code} for {url} (browser also failed: {exc})")
+    _reject_block_page(html, url)
+    return html
+
+
+BLOCK_MARKERS = (
+    "not in allowlist",           # egress proxy
+    "access denied",
+    "request blocked",
+    "checking your browser",      # CDN interstitial
+    "enable javascript and cookies",
+    "attention required",
+)
+
+
+def _reject_block_page(html: str, url: str) -> None:
+    """A block page is not content.
+
+    The browser fallback happily returns whatever it was served - a corporate
+    proxy notice, a CDN challenge - and without this check that HTML flows
+    downstream and shows up as an empty guide rather than an error.
+    """
+    stripped = (html or "").strip()
+    lowered = stripped.lower()
+    hit = next((m for m in BLOCK_MARKERS if m in lowered), None)
+    if hit:
+        text = re.sub(r"<[^>]+>", " ", stripped)
+        text = re.sub(r"\s+", " ", text).strip()
+        raise FetchError(f"{url} was intercepted: {text[:160]}")
+    if len(stripped) < 1000:
+        raise FetchError(
+            f"{url} returned only {len(stripped)} bytes via the browser - "
+            "almost certainly a block or challenge page, not the document"
+        )
 
 
 # --------------------------------------------------------------- redhat ----
 def resolve_version(sess: requests.Session, product: str, version: str) -> Tuple[str, str]:
     """Return (version, display name). `latest` resolves via the product root."""
     url = f"{DOC_ROOT}/{product}/{version}" if version and version != "latest" else f"{DOC_ROOT}/{product}"
-    resp = sess.get(url, timeout=30)
-    if resp.status_code >= 400:
-        raise FetchError(f"HTTP {resp.status_code} for {url}")
-    soup = make_soup(resp.text)
+    soup = make_soup(get_html(sess, url, timeout=30))
     title = (soup.title.string if soup.title else "") or ""
     parts = [p.strip() for p in title.split("|") if p.strip()
              and "red hat documentation" not in p.lower()]
@@ -63,16 +140,15 @@ def resolve_version(sess: requests.Session, product: str, version: str) -> Tuple
         if len(parts) >= 2 and re.fullmatch(r"\d+(\.\d+)*", parts[1]):
             resolved = parts[1]
         else:
-            match = re.search(rf"/{re.escape(product)}/([^/?#]+)", resp.url)
+            link = soup.find("link", rel="canonical")
+            href = (link.get("href") if link else "") or ""
+            match = re.search(rf"/{re.escape(product)}/([^/?#]+)", href)
             resolved = match.group(1) if match else "latest"
     return resolved, display
 
 
 def list_guides(sess: requests.Session, product: str, version: str) -> List[str]:
-    resp = sess.get(f"{DOC_ROOT}/{product}/{version}", timeout=30)
-    if resp.status_code >= 400:
-        raise FetchError(f"HTTP {resp.status_code} for the {product} {version} index")
-    soup: BeautifulSoup = make_soup(resp.text)
+    soup: BeautifulSoup = make_soup(get_html(sess, f"{DOC_ROOT}/{product}/{version}", timeout=30))
     slugs: List[str] = []
     for anchor in soup.find_all("a", href=True):
         match = GUIDE_RE.search(anchor["href"])
@@ -105,14 +181,11 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
     for guide in guides:
         url = f"{DOC_ROOT}/{source.product}/{version}/html-single/{guide}/index"
         try:
-            resp = sess.get(url, timeout=60)
-            if resp.status_code >= 400:
-                LOG.warning("[%s] %s: HTTP %s", source.id, guide, resp.status_code)
-                continue
-            soup = make_soup(resp.text)
+            html = get_html(sess, url)
+            soup = make_soup(html)
             title = page_title(soup) or guide.replace("_", " ").title()
-            body = to_markdown(resp.text)
-        except requests.RequestException as exc:
+            body = to_markdown(html)
+        except (FetchError, requests.RequestException) as exc:
             LOG.warning("[%s] %s: %s", source.id, guide, exc)
             continue
         if len(body) < 400:

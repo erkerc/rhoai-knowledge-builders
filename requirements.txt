@@ -2,3 +2,6 @@ requests>=2.31
 beautifulsoup4>=4.12
 PyYAML>=6.0
 lxml>=5.0          # optional, faster and more forgiving HTML parsing
+
+# Needed only when docs.redhat.com refuses plain HTTP (403):
+# pip install playwright && playwright install chromium
