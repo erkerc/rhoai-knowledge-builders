@@ -31,23 +31,19 @@ sources:
     label: Red Hat OpenShift AI Self-Managed
     product: red_hat_openshift_ai_self-managed
     version: latest
-    # Guides worth compiling. Leave empty to take every guide in the version.
-    include:
-      - release_notes
-      - installing_and_uninstalling
-      - serving_models
-      - working_with_accelerators
-      - monitoring_and_managing
-      - managing_resources
-      - working_with_distributed_workloads
-      - working_with_connections
-      - managing_users
-      - upgrading
+    # Guides worth compiling. Leave empty (or delete the block) to take every
+    # guide in the version. Slugs change between releases - check with:
+    #     rhkb guides --source rhoai --yaml
+    # and paste the result here.
+    include: []
 
+  # NOTE: as of 3.4 this slug resolves to the "Red Hat AI Inference" pages and
+  # lists no guides of its own. Verify with `rhkb guides --source rhaiis`; if it
+  # is empty, rhai-inference below already covers this content.
   - id: rhaiis
     type: redhat-docs
     tier: core
-    enabled: true
+    enabled: false
     label: Red Hat AI Inference Server
     product: red_hat_ai_inference_server
     version: latest

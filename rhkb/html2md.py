@@ -43,14 +43,33 @@ def page_title(soup: BeautifulSoup) -> str:
     return ""
 
 
+def _is_decomposed(node: Tag) -> bool:
+    """True once bs4 has torn this tag down.
+
+    decompose() clears the tag's __dict__, and Tag.__getattr__ then resolves
+    `attrs` to a child search that returns None - so `node.get(...)` raises
+    "'NoneType' object has no attribute 'get'". Descendants of a decomposed
+    parent hit this too, which matters because we iterate over a list captured
+    before any decomposing happened.
+    """
+    return getattr(node, "_decomposed", False) or not isinstance(getattr(node, "attrs", None), dict)
+
+
+def _attr(node: Tag, name: str) -> str:
+    value = node.attrs.get(name)
+    if value is None:
+        return ""
+    return " ".join(value) if isinstance(value, (list, tuple)) else str(value)
+
+
 def _is_chrome(node: Tag) -> bool:
+    if _is_decomposed(node):
+        return False
     if node.name in DROP_TAGS:
         return True
     ident = " ".join(filter(None, [
-        node.get("id") or "",
-        " ".join(node.get("class") or []),
-        node.get("data-testid") or "",
-        node.get("role") or "",
+        _attr(node, "id"), _attr(node, "class"),
+        _attr(node, "data-testid"), _attr(node, "role"),
     ]))
     return bool(ident and DROP_PATTERNS.search(ident))
 
@@ -70,6 +89,8 @@ def extract_content(soup: BeautifulSoup) -> Tag:
         body = soup.body or soup
 
     for node in list(body.find_all(True)):
+        if _is_decomposed(node):
+            continue          # a parent we already removed took this one with it
         if _is_chrome(node):
             node.decompose()
     return body
@@ -116,7 +137,8 @@ def _children(node: Tag) -> str:
 # --- blocks ---------------------------------------------------------------
 def _code_block(node: Tag) -> str:
     lang = ""
-    classes = (node.get("class") or []) + ((node.find("code") or {}).get("class", []) if node.find("code") else [])
+    inner = node.find("code")
+    classes = _attr(node, "class").split() + (_attr(inner, "class").split() if inner is not None else [])
     for cls in classes:
         match = re.match(r"(?:language|lang|highlight)-([\w+]+)", str(cls))
         if match:
@@ -204,7 +226,9 @@ def to_markdown(html: str) -> str:
     body = extract_content(soup)
 
     blocks: List[str] = []
-    for node in body.find_all(BLOCK_TAGS):
+    for node in list(body.find_all(BLOCK_TAGS)):
+        if _is_decomposed(node):
+            continue
         # Skip containers whose children we will visit anyway.
         if node.name in ("div", "section") and node.find(BLOCK_TAGS):
             continue

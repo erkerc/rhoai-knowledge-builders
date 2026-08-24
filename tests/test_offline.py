@@ -186,6 +186,27 @@ def main():
         ok &= check("brief points at the schema, not the whole wiki", "CLAUDE.md" in brief)
         ok &= check("brief stays near the budget", est_tokens(brief) < 3000 * 2, est_tokens(brief))
 
+    # --- decomposed-node regression --------------------------------------
+    # Nested chrome (a div.toc wrapping a span, an <svg> with children) used to
+    # raise "'NoneType' object has no attribute 'get'" and abort a whole product.
+    nested = ("<html><body>"
+              "<div class='toc'><span id='inner'>nav child</span><ul><li>x</li></ul></div>"
+              "<svg><path d='M0'/><title>icon</title></svg>"
+              "<nav class='md-nav'><a href='/a'>n</a></nav>"
+              "<article><h1>Serving models</h1>"
+              + "<p>Real documentation text. </p>" * 40
+              + "<pre><code>oc get pods</code></pre></article></body></html>")
+    try:
+        nested_md = to_markdown(nested)
+        crashed = ""
+    except Exception as exc:
+        nested_md, crashed = "", f"{type(exc).__name__}: {exc}"
+    ok &= check("nested chrome does not crash the converter", not crashed, crashed)
+    ok &= check("nested chrome is still removed",
+                all(x not in nested_md for x in ("nav child", "icon", "md-nav")), nested_md[:200])
+    ok &= check("content survives chrome removal",
+                "# Serving models" in nested_md and "oc get pods" in nested_md, nested_md[:200])
+
     # --- block-page detection -------------------------------------------
     from rhkb.fetch import FetchError, _reject_block_page
 
@@ -215,10 +236,17 @@ def main():
     ok &= check("repo sources restrict their paths",
                 all(s.paths for s in catalog.sources if s.type == "repo"),
                 [s.id for s in catalog.sources if s.type == "repo" and not s.paths])
-    ok &= check("core sources are on by default",
-                all(s.enabled for s in catalog.sources if s.tier == "core" and s.id != "rhelai"))
+    # rhelai and rhaiis are deliberately off (rhaiis publishes no guides of its own).
+    ok &= check("the main core sources are on by default",
+                all(catalog.by_id(i).enabled for i in ("rhoai", "rhai-inference", "rhcl")))
+    ok &= check("at least one docs source and one repo source are on",
+                any(s.enabled and s.type == "redhat-docs" for s in catalog.sources)
+                and any(s.enabled and s.type == "repo" for s in catalog.sources))
     ok &= check("ocp is scoped, not the whole product",
                 bool(catalog.by_id("ocp").include))
+    ok &= check("no source ships a guessed include list for a fast-moving product",
+                catalog.by_id("rhoai").include == [],
+                catalog.by_id("rhoai").include)
     ok &= check("tier selection works",
                 {s.id for s in catalog.select(["core"])} >= {"rhoai", "rhcl"})
     ok &= check("'repo' selects only repos",

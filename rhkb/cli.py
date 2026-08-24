@@ -20,6 +20,7 @@ EPILOG = """\
 typical flow:
   rhkb sources                     # what is available, what is on
   rhkb enable vllm kserve          # pick what you want
+  rhkb guides --source rhoai       # which guides does this product publish?
   rhkb fetch                       # pull enabled sources into raw/
   rhkb plan                        # how much material, how many sessions
   rhkb next > brief.md             # one context-sized ingest brief
@@ -56,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     for name, help_text in (("enable", "turn sources on"), ("disable", "turn sources off")):
         toggler = sub.add_parser(name, parents=[common], help=help_text)
         toggler.add_argument("ids", nargs="+", metavar="ID")
+
+    lister2 = sub.add_parser("guides", parents=[common],
+                             help="list the guide slugs a docs product actually publishes")
+    lister2.add_argument("--yaml", action="store_true",
+                         help="print them as an `include:` block ready to paste into sources.yaml")
 
     getter = sub.add_parser("fetch", parents=[common], help="download enabled sources into raw/")
     getter.add_argument("--limit", type=int, default=0, help="cap items per source (for a trial run)")
@@ -151,6 +157,56 @@ def cmd_init(args) -> int:
     ensure_scaffold(wiki_dir(args))
     print(f"ready: {raw_dir(args)}/ and {wiki_dir(args)}/")
     return 0
+
+
+def cmd_guides(args) -> int:
+    """What does this product actually publish? Beats guessing at `include:`."""
+    from .fetch import list_guides, resolve_version
+
+    catalog = load(args)
+    sources = [s for s in catalog.select(args.source) if s.type == "redhat-docs"]
+    if not sources:
+        raise SystemExit("select a docs source, e.g. rhkb guides --source rhoai")
+
+    sess = session()
+    sess.rhkb_fallback = getattr(args, "browser_fallback", "auto")
+    sess.rhkb_engine = getattr(args, "browser_engine", "auto")
+    status = 0
+    try:
+        for source in sources:
+            try:
+                version, display = resolve_version(sess, source.product, source.version)
+                guides = list_guides(sess, source.product, version)
+            except FetchError as exc:
+                LOG.error("[%s] %s", source.id, exc)
+                status = 2
+                continue
+
+            print(f"\n# {source.id}: {display} {version} - {len(guides)} guide(s)")
+            if not guides:
+                print("#   none found - check `product:` in sources.yaml against the docs URL")
+                status = 2
+                continue
+            configured = set(source.include or [])
+            if args.yaml:
+                print("    include:")
+                for guide in guides:
+                    print(f"      - {guide}")
+            else:
+                for guide in guides:
+                    mark = "*" if guide in configured else " "
+                    print(f"  {mark} {guide}")
+                stale = configured - set(guides)
+                if stale:
+                    print(f"\n  in your include: but not published: {', '.join(sorted(stale))}")
+                if configured:
+                    print("  (* = currently in your include: list)")
+    finally:
+        browser = getattr(sess, "rhkb_browser", None)
+        if browser:
+            browser.stop()
+        sess.close()
+    return status
 
 
 def cmd_fetch(args) -> int:
@@ -347,6 +403,7 @@ COMMANDS = {
     "enable": lambda a: cmd_toggle(a, True),
     "disable": lambda a: cmd_toggle(a, False),
     "init": cmd_init,
+    "guides": cmd_guides,
     "fetch": cmd_fetch,
     "plan": cmd_plan,
     "next": cmd_next,

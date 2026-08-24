@@ -188,6 +188,11 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
         except (FetchError, requests.RequestException) as exc:
             LOG.warning("[%s] %s: %s", source.id, guide, exc)
             continue
+        except Exception as exc:   # a parser bug on one page is not a reason to lose the rest
+            LOG.warning("[%s] %s: could not convert (%s: %s)",
+                        source.id, guide, type(exc).__name__, exc)
+            LOG.debug("", exc_info=True)
+            continue
         if len(body) < 400:
             LOG.warning("[%s] %s: extracted almost nothing, skipping", source.id, guide)
             continue
@@ -205,6 +210,11 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
         write_atomic(dest, head + "\n" + body)
         written.append(dest)
         LOG.debug("[%s] wrote %s (%s tokens)", source.id, dest.name, est_tokens(body))
+
+    if guides and not written:
+        LOG.warning("[%s] %d guide(s) discovered but none could be saved", source.id, len(guides))
+    elif len(written) < len(guides):
+        LOG.info("[%s] saved %d of %d guide(s)", source.id, len(written), len(guides))
     return written
 
 
