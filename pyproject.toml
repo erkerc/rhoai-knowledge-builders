@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rhoai-knowledge-builders"
+version = "0.1.0"
+description = "Compile Red Hat AI docs and upstream repos into an LLM-maintained wiki"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Erkan", email = "erkerc@users.noreply.github.com" }]
+keywords = ["red hat", "openshift-ai", "rhoai", "knowledge-base", "llm-wiki", "documentation"]
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+fast = ["lxml>=5.0"]
+
+[project.urls]
+Homepage = "https://github.com/erkerc/rhoai-knowledge-builders"
+Issues = "https://github.com/erkerc/rhoai-knowledge-builders/issues"
+
+[project.scripts]
+rhkb = "rhkb.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rhkb*"]

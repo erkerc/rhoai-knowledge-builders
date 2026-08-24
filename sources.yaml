@@ -1,0 +1,251 @@
+# rhoai-knowledge-builders - source catalog
+#
+# Every source has `enabled: true|false`. Nothing is fetched unless enabled.
+# `rhkb sources` lists them; `rhkb enable <id>` / `rhkb disable <id>` flip them.
+#
+# Keep this file under version control - it is the record of what your wiki was
+# built from.
+#
+# tier:
+#   core       the Red Hat AI product surface itself
+#   platform   the OpenShift layer RHOAI actually depends on (not all of OCP)
+#   upstream   source repos: CRDs, examples and design docs the product docs omit
+#   extra      useful but off by default - large, niche, or fast-moving
+#
+# For `repo` sources, `paths` is a sparse-checkout list. Only these paths are
+# fetched; a full clone of vllm or openshift-docs would blow your disk and your
+# context budget alike.
+
+defaults:
+  docs_lang: en-US
+  unit_tokens: 6000        # max size of one ingest unit
+  session_tokens: 25000    # target context per ingest session
+
+sources:
+
+  # ---------------------------------------------------------------- core ----
+  - id: rhoai
+    type: redhat-docs
+    tier: core
+    enabled: true
+    label: Red Hat OpenShift AI Self-Managed
+    product: red_hat_openshift_ai_self-managed
+    version: latest
+    # Guides worth compiling. Leave empty to take every guide in the version.
+    include:
+      - release_notes
+      - installing_and_uninstalling
+      - serving_models
+      - working_with_accelerators
+      - monitoring_and_managing
+      - managing_resources
+      - working_with_distributed_workloads
+      - working_with_connections
+      - managing_users
+      - upgrading
+
+  - id: rhaiis
+    type: redhat-docs
+    tier: core
+    enabled: true
+    label: Red Hat AI Inference Server
+    product: red_hat_ai_inference_server
+    version: latest
+
+  - id: rhai-inference
+    type: redhat-docs
+    tier: core
+    enabled: true
+    label: Red Hat AI Inference
+    product: red_hat_ai_inference
+    version: latest
+
+  - id: rhcl
+    type: redhat-docs
+    tier: core
+    enabled: true
+    label: Red Hat Connectivity Link
+    product: red_hat_connectivity_link
+    version: "1.4"
+
+  - id: rhelai
+    type: redhat-docs
+    tier: core
+    enabled: false
+    label: Red Hat Enterprise Linux AI
+    product: red_hat_enterprise_linux_ai
+    version: latest
+
+  # ------------------------------------------------------------ platform ----
+  # OpenShift is ~100 guides per version. These are the ones an RHOAI
+  # deployment actually depends on; the rest is noise for this wiki.
+  - id: ocp
+    type: redhat-docs
+    tier: platform
+    enabled: true
+    label: OpenShift Container Platform
+    product: openshift_container_platform
+    version: latest
+    include:
+      - specialized_hardware_and_driver_enablement
+      - hardware_accelerators
+      - nodes
+      - machine_management
+      - storage
+      - scalability_and_performance
+      - networking_overview
+      - ingress_and_load_balancing
+      - operators
+      - extensions
+      - monitoring
+      - observability_overview
+      - authentication_and_authorization
+      - security_and_compliance
+      - postinstallation_configuration
+      - ai_workloads
+
+  - id: ocp-virt
+    type: redhat-docs
+    tier: platform
+    enabled: false
+    label: Red Hat OpenShift Virtualization
+    product: red_hat_openshift_virtualization
+    version: latest
+
+  - id: openshift-docs-src
+    type: repo
+    tier: platform
+    enabled: false          # AsciiDoc source; enable when you want diffable OCP
+    label: OpenShift docs (AsciiDoc source)
+    repo: https://github.com/openshift/openshift-docs
+    ref: main
+    paths:
+      - hardware_accelerators
+      - specialized_hardware
+      - modules/nvidia-gpu-architecture.adoc
+      - machine_management
+    note: >
+      Diffable across releases - branch per version (enterprise-4.22).
+      Prefer this over scraping when you care about what changed.
+
+  # ------------------------------------------------------------ upstream ----
+  - id: kserve
+    type: repo
+    tier: upstream
+    enabled: true
+    label: KServe
+    repo: https://github.com/kserve/kserve
+    ref: master
+    paths: [docs, config/crd]
+    note: The serving runtime behind RHOAI model serving; CRD fields the product docs summarise.
+
+  - id: vllm
+    type: repo
+    tier: upstream
+    enabled: true
+    label: vLLM
+    repo: https://github.com/vllm-project/vllm
+    ref: main
+    paths: [docs]
+    exclude: ['docs/api/', 'docs/(zh|ja)/']
+    note: Serving engine internals - flags, quantization, KV cache, distributed serving.
+
+  - id: llm-d
+    type: repo
+    tier: upstream
+    enabled: true
+    label: llm-d
+    repo: https://github.com/llm-d/llm-d
+    ref: main
+    paths: [docs, guides]
+
+  - id: odh-operator
+    type: repo
+    tier: upstream
+    enabled: true
+    label: Open Data Hub operator (RHOAI upstream)
+    repo: https://github.com/opendatahub-io/opendatahub-operator
+    ref: main
+    paths: [docs, config/crd/bases, bundle/manifests]
+    note: DataScienceCluster and DSCInitialization CRDs - the actual API behind an RHOAI install.
+
+  - id: kuadrant-operator
+    type: repo
+    tier: upstream
+    enabled: true
+    label: Kuadrant operator
+    repo: https://github.com/Kuadrant/kuadrant-operator
+    ref: main
+    paths: [doc, examples, config/samples]
+
+  - id: gpu-operator
+    type: repo
+    tier: upstream
+    enabled: true
+    label: NVIDIA GPU Operator
+    repo: https://github.com/NVIDIA/gpu-operator
+    ref: main
+    paths: [docs, deployments/gpu-operator/crds]
+
+  - id: maas
+    type: repo
+    tier: upstream
+    enabled: true
+    label: ODH Models-as-a-Service
+    repo: https://github.com/opendatahub-io/models-as-a-service
+    ref: main
+    paths: [docs]
+
+  - id: nfd-operator
+    type: repo
+    tier: upstream
+    enabled: true
+    label: Node Feature Discovery operator
+    repo: https://github.com/openshift/cluster-nfd-operator
+    ref: master
+    paths: [docs, config/crd/bases, manifests]
+
+  - id: trustyai
+    type: repo
+    tier: upstream
+    enabled: false
+    label: TrustyAI service
+    repo: https://github.com/trustyai-explainability/trustyai-service
+    ref: main
+    paths: [docs]
+
+  - id: data-science-pipelines
+    type: repo
+    tier: upstream
+    enabled: false
+    label: Data Science Pipelines
+    repo: https://github.com/opendatahub-io/data-science-pipelines
+    ref: master
+    paths: [docs]
+
+  - id: kuberay
+    type: repo
+    tier: upstream
+    enabled: false
+    label: KubeRay (distributed workloads)
+    repo: https://github.com/ray-project/kuberay
+    ref: master
+    paths: [docs, ray-operator/config/samples]
+
+  - id: llama-stack-operator
+    type: repo
+    tier: extra
+    enabled: false
+    label: Llama Stack Kubernetes operator
+    repo: https://github.com/opendatahub-io/llama-stack-k8s-operator
+    ref: main
+    paths: [docs, config/samples]
+
+  - id: odh-dashboard
+    type: repo
+    tier: extra
+    enabled: false
+    label: ODH Dashboard
+    repo: https://github.com/opendatahub-io/odh-dashboard
+    ref: main
+    paths: [docs]

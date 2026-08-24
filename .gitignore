@@ -1,0 +1,27 @@
+# Fetched material and agent output - regenerate with `rhkb fetch`
+raw/
+state.json
+brief.md
+briefs/
+
+# The wiki itself is usually worth committing (it is the product).
+# Uncomment if you'd rather keep it private:
+# wiki/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
