@@ -1,27 +1,38 @@
-# Fetched material and agent output - regenerate with `rhkb fetch`
-raw/
-state.json
-brief.md
-briefs/
+# ---------------------------------------------------------------------------
+# ALLOWLIST. This repository holds the rhkb tool and nothing else.
+#
+# Everything is ignored by default; only the files listed under "Allowed" are
+# tracked. Fetched documentation (raw/), the compiled wiki (wiki/), ingest state,
+# briefs, chat exports, customer notes, .env files and editor/agent state are
+# therefore never picked up by `git add`, whatever they are called or wherever
+# they are put.
+#
+# Private data belongs in a workspace OUTSIDE this directory (RHKB_HOME, see
+# README). If you need to track a new kind of file, add it to the allowlist
+# below on purpose.
+# ---------------------------------------------------------------------------
 
-# The wiki itself is usually worth committing (it is the product).
-# Uncomment if you'd rather keep it private:
-# wiki/
+# Ignore everything...
+*
 
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
-build/
-dist/
-.venv/
-venv/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
+# ...but let git look inside directories (files in them stay ignored unless
+# allowed below).
+!*/
 
-# Editors / OS
-.vscode/
-.idea/
-.DS_Store
-*.swp
+# --------------------------------- Allowed ---------------------------------
+# Project files
+!/.gitignore
+!/LICENSE
+!/README.md
+!/CLAUDE.md
+!/pyproject.toml
+!/requirements.txt
+!/sources.yaml
+
+# The tool and its tests: Python source only
+!/rhkb/**/*.py
+!/tests/**/*.py
+
+# CI and git hooks
+!/.github/workflows/*.yml
+!/.githooks/*

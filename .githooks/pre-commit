@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuses commits that include files outside the allowlist in .gitignore, which is
+# what `git add -f` (or a hand-edited .gitignore) would otherwise let through.
+# Enable once per clone:   git config core.hooksPath .githooks
+exec python3 "$(git rev-parse --show-toplevel)/tests/test_repo_hygiene.py" --staged

@@ -50,21 +50,67 @@ If you skip it, `rhkb fetch` fails with a message that says to run it.
 Use `python -m playwright ...` rather than a bare `playwright ...` so the browser is installed
 for the same interpreter you run rhkb with.
 
+Then set up your private workspace (next section) before you fetch anything.
+
+## Your data lives outside this repository
+
+This repository is the **tool**. Everything it produces or consumes is private to you and
+belongs in a separate **workspace** directory that is not a git repository (or is a *private* one):
+
+| in the workspace, `~/rhkb-workspace` | why it must stay out of this repo |
+|---|---|
+| `raw/` | fetched copies of Red Hat documentation and upstream repos |
+| `wiki/` | compiled from your own work; it accumulates customer names, cluster details and troubleshooting notes |
+| `state.json`, `brief.md`, `briefs/` | ingest state and generated briefs |
+| `sources.yaml` | *your* selection of sources, including any private notes in it |
+| `CLAUDE.md` | your copy of the wiki schema; agents append to it |
+
+```bash
+export RHKB_HOME="$HOME/rhkb-workspace"
+python -m rhkb init            # creates raw/, wiki/, and copies sources.yaml + CLAUDE.md in
+```
+
+With `RHKB_HOME` set, every command reads and writes there regardless of your current
+directory, and `enable` / `disable` edit *your* `sources.yaml` rather than the template in this
+repo. Run your agent from the workspace, not from the code repo:
+
+```bash
+cd ~/rhkb-workspace && claude
+```
+
+rhkb warns if you point it at its own source checkout.
+
+**What stops private files reaching GitHub.** The `.gitignore` here is an *allowlist*: it ignores
+everything and re-includes only the tool's own code (`rhkb/**/*.py`, `tests/**/*.py`, the CI
+workflow, and a handful of project files). A new folder of notes, a chat export, a `.env` or a
+PDF is therefore ignored automatically, with no need to anticipate its name. Two further guards:
+
+```bash
+git config core.hooksPath .githooks          # once per clone: blocks `git add -f` of anything off the allowlist
+python tests/test_repo_hygiene.py            # CI runs this; fails if a non-allowlisted file is tracked
+python tests/test_repo_hygiene.py --history  # audit every path ever committed, on any branch
+```
+
+An ignore rule cannot remove a file that was already committed, and it does nothing about a
+push that already happened. If something private did get committed, `--history` lists it and
+`python tests/test_repo_hygiene.py --filter-repo-args` prints the `git filter-repo` command that
+rewrites history down to the allowlist.
+
+If you want version control for the workspace, make that a **private** repository.
+
 ## Running rhkb
 
-Every example in this README is written as `python -m rhkb <command>`, run from the repo root.
-That needs no installation beyond the steps above.
+Every command example below is written as `python -m rhkb <command>`, run from the repo root
+(or with `PYTHONPATH` set to it). That needs no installation beyond the steps above.
 
 Typing that every time gets old. Two ways to shorten it to `rhkb <command>`:
 
 **A shell function** (works without installing the package, from any directory). Add to
-`~/.zshrc` (the macOS default) or `~/.bashrc`, adjusting the path:
+`~/.zshrc` (the macOS default) or `~/.bashrc`, adjusting the paths:
 
 ```bash
-rhkb() {
-  ( cd "$HOME/working/rhoai-knowledge-builders" && \
-    PYTHONPATH="$HOME/working/rhoai-knowledge-builders" python -m rhkb "$@" )
-}
+export RHKB_HOME="$HOME/rhkb-workspace"
+rhkb() { PYTHONPATH="$HOME/working/rhoai-knowledge-builders" python -m rhkb "$@"; }
 ```
 
 ```bash
@@ -73,16 +119,15 @@ type rhkb          # should say: rhkb is a shell function
 rhkb sources
 ```
 
-It is a function rather than an `alias` because it has to `cd` into the project (rhkb reads
-`sources.yaml` and writes `raw/` and `wiki/` relative to it) and forward arguments with `"$@"`.
-An `alias` can't do either cleanly, and a stale `alias rhkb=...` left in your rc file will
-shadow the function, so delete any old one and run `unalias rhkb` in open terminals.
+It is a function rather than an `alias` because it forwards arguments with `"$@"`, which an
+`alias` can't do cleanly. A stale `alias rhkb=...` in your rc file will shadow the function, so
+delete any old one and run `unalias rhkb` in open terminals.
 
-Because the command runs in a subshell, a shell redirect such as `rhkb next > brief.md` writes
-`brief.md` into the directory you are standing in, not the project. Use `--out` to be explicit:
+A shell redirect such as `rhkb next > brief.md` writes into the directory you are standing in.
+Use `--out` to put it in the workspace:
 
 ```bash
-rhkb next --out ~/working/rhoai-knowledge-builders/brief.md
+rhkb next --out "$RHKB_HOME/brief.md"
 ```
 
 **Or install the package**, which gives a real `rhkb` executable:
@@ -93,7 +138,7 @@ rhkb sources
 ```
 
 That is simpler, but the command only exists in the Python environment you installed into, so
-activate the same virtualenv first.
+activate the same virtualenv first. Set `RHKB_HOME` either way.
 
 Hints printed by rhkb itself (for example "run `rhkb fetch` first") use the short form.
 
@@ -180,12 +225,22 @@ unaffected either way.
 
 ## Layout
 
+Two directories, deliberately separate.
+
 ```
-sources.yaml     the catalog - what to fetch. Under version control on purpose.
-CLAUDE.md        the wiki schema. The agent's contract; co-evolve it with your agent.
-raw/             fetched markdown. Immutable - the agent reads, never writes.
-wiki/            the agent owns this: pages/, index.md, log.md
-state.json       which units are ingested, by content hash
+rhoai-knowledge-builders/     the code repo - public-safe, allowlisted by .gitignore
+├── rhkb/                     the tool
+├── tests/                    including test_repo_hygiene.py
+├── sources.yaml              catalog TEMPLATE (copied into the workspace by `init`)
+├── CLAUDE.md                 wiki schema TEMPLATE (likewise)
+└── .githooks/pre-commit
+
+~/rhkb-workspace/             RHKB_HOME - private, never pushed to a public repo
+├── sources.yaml              your catalog: what to fetch
+├── CLAUDE.md                 the wiki schema your agent follows; co-evolve it
+├── raw/                      fetched markdown. Immutable - the agent reads, never writes.
+├── wiki/                     the agent owns this: pages/, index.md, log.md
+└── state.json                which units are ingested, by content hash
 ```
 
 ## Ingest state and version bumps

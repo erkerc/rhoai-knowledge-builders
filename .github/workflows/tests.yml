@@ -22,6 +22,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Offline tests
         run: python tests/test_offline.py
+      - name: Repository hygiene (allowlist, tracked files)
+        run: python tests/test_repo_hygiene.py
       - name: CLI smoke test
         run: |
           python -m rhkb --help

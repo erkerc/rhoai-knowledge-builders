@@ -366,6 +366,67 @@ def main():
     ok &= check("a heading-looking line inside a code fence is ignored",
                 trim_to_title("nav\n\n" + fenced, "Real title").startswith("# Real title\n\nbody"))
 
+    # --- workspace outside the repository ------------------------------------
+    import contextlib
+    import hashlib
+    import io
+    import os
+    from rhkb import cli as cli_mod
+
+    def quiet_main(argv):
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            return cli_mod.main(argv), sink.getvalue()
+
+    def digest(path):
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    saved_home = os.environ.pop("RHKB_HOME", None)
+    template_hash = digest(ROOT / "sources.yaml")
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "ws"
+
+            os.environ["RHKB_HOME"] = str(ws)
+            ok &= check("RHKB_HOME becomes the default workspace",
+                        Path(cli_mod.build_parser().parse_args(["status"]).root) == ws)
+            os.environ.pop("RHKB_HOME")
+            ok &= check("without RHKB_HOME the default is the current directory",
+                        Path(cli_mod.build_parser().parse_args(["status"]).root) == Path("."))
+
+            rc, out = quiet_main(["init", "-C", str(ws)])
+            ok &= check("init builds a complete workspace",
+                        rc == 0 and (ws / "raw").is_dir() and (ws / "wiki" / "index.md").exists()
+                        and (ws / "sources.yaml").exists() and (ws / "CLAUDE.md").exists()
+                        and (ws / ".gitignore").exists(), sorted(p.name for p in ws.iterdir()))
+            ok &= check("the workspace .gitignore keeps fetched docs out of git",
+                        "raw/" in (ws / ".gitignore").read_text())
+
+            (ws / "sources.yaml").write_text("sources: []\n")
+            quiet_main(["init", "-C", str(ws)])
+            ok &= check("re-running init never overwrites your catalog",
+                        (ws / "sources.yaml").read_text() == "sources: []\n")
+
+            fresh = Path(tmp) / "fresh"
+            rc, out = quiet_main(["enable", "trustyai", "-C", str(fresh)])
+            ok &= check("enable on a new workspace copies the template and edits the copy",
+                        rc == 0 and load_catalog(fresh / "sources.yaml").by_id("trustyai").enabled, out)
+            ok &= check("enable never modifies the tracked template",
+                        digest(ROOT / "sources.yaml") == template_hash)
+
+            bare = Path(tmp) / "bare"
+            bare.mkdir()
+            rc, out = quiet_main(["sources", "-C", str(bare)])
+            ok &= check("read-only commands fall back to the bundled catalog", rc == 0 and "rhoai" in out)
+
+            ok &= check("a temp directory is not mistaken for the code repository",
+                        cli_mod.in_code_repo(Path(tmp)) is False)
+            ok &= check("the source checkout is recognized as the code repository",
+                        cli_mod.in_code_repo(ROOT) == (ROOT / ".git").exists())
+    finally:
+        if saved_home is not None:
+            os.environ["RHKB_HOME"] = saved_home
+
     # --- catalog ----------------------------------------------------------
     catalog = load_catalog(ROOT / "sources.yaml")
     ok &= check("catalog parses", len(catalog.sources) > 10, len(catalog.sources))

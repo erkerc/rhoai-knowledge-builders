@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -19,6 +21,9 @@ from .wiki import append_log, build_brief, ensure_scaffold, pack_session, read_i
 EPILOG = """\
 Run as `python -m rhkb <command>` from the repo root, or define the shell
 function described in the README and type `rhkb <command>` from anywhere.
+
+Keep your data out of the code repo: `export RHKB_HOME=~/rhkb-workspace`, then
+`rhkb init`. raw/, wiki/, state.json and your sources.yaml live there.
 
 typical flow:
   rhkb sources                     # what is available, what is on
@@ -39,8 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"rhkb {__version__}")
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("-C", "--root", type=Path, default=Path("."),
-                        help="project root (default: current directory)")
+    common.add_argument("-C", "--root", type=Path, default=default_root(),
+                        help="workspace holding raw/, wiki/, state.json and your sources.yaml "
+                             "(default: $RHKB_HOME, else the current directory)")
     common.add_argument("--catalog", type=Path, default=None, help="path to sources.yaml")
     common.add_argument("-s", "--source", action="append", metavar="ID",
                         help="source id, tier (core/platform/upstream/extra), 'docs', 'repo', "
@@ -97,16 +103,71 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # --------------------------------------------------------------- helpers ---
+#: Where the tool's own templates (sources.yaml, CLAUDE.md) live: the repo root.
+BUNDLED_DIR = Path(__file__).resolve().parent.parent
+
+
+def default_root() -> Path:
+    """The workspace: $RHKB_HOME when set, else the current directory.
+
+    Keeping the workspace outside the code repository is the point. raw/ holds
+    fetched documentation and wiki/ holds whatever the agent compiled from it,
+    including anything you feed back in from customer work; none of that should
+    sit in a directory that is also a (possibly public) git repository.
+    """
+    env = os.environ.get("RHKB_HOME", "").strip()
+    return Path(env).expanduser() if env else Path(".")
+
+
+def in_code_repo(root: Path) -> bool:
+    """True when `root` is the rhkb source checkout itself."""
+    try:
+        return root.resolve() == BUNDLED_DIR and (root / ".git").exists()
+    except OSError:
+        return False
+
+
+def warn_if_in_code_repo(root: Path) -> None:
+    if in_code_repo(root):
+        LOG.warning(
+            "workspace is the rhkb code repository (%s). Fetched docs and wiki pages should "
+            "live outside it: `export RHKB_HOME=~/rhkb-workspace && rhkb init` (see README).", root)
+
+
 def catalog_path(args) -> Path:
+    """The catalog to read: --catalog, else the workspace copy, else the bundled template."""
     if args.catalog:
         return args.catalog
-    return args.root / "sources.yaml"
+    local = args.root / "sources.yaml"
+    if local.exists():
+        return local
+    bundled = BUNDLED_DIR / "sources.yaml"
+    return bundled if bundled.exists() else local
+
+
+def local_catalog_for_edit(args) -> Path:
+    """The catalog `enable`/`disable` should modify - never the bundled template.
+
+    The template is tracked in the public repo; your selection is yours. If the
+    workspace has no copy yet, make one first.
+    """
+    if args.catalog:
+        return args.catalog
+    local = args.root / "sources.yaml"
+    if local.exists():
+        return local
+    bundled = BUNDLED_DIR / "sources.yaml"
+    if bundled.exists() and bundled.resolve() != local.resolve():
+        local.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(bundled, local)
+        print(f"copied the catalog template to {local}")
+    return local
 
 
 def load(args) -> Catalog:
     path = catalog_path(args)
     if not path.exists():
-        raise SystemExit(f"no catalog at {path} - run rhkb from the project root, or pass --catalog")
+        raise SystemExit(f"no catalog at {path} - run `rhkb init`, or pass --catalog")
     return load_catalog(path)
 
 
@@ -145,9 +206,9 @@ def cmd_sources(args) -> int:
 
 
 def cmd_toggle(args, value: bool) -> int:
-    path = catalog_path(args)
+    path = local_catalog_for_edit(args)
     if not path.exists():
-        raise SystemExit(f"no catalog at {path}")
+        raise SystemExit(f"no catalog at {path} - run `rhkb init`")
     changed = set_enabled(path, args.ids, value)
     if changed:
         print(f"{'enabled' if value else 'disabled'}: {', '.join(changed)}")
@@ -156,10 +217,45 @@ def cmd_toggle(args, value: bool) -> int:
     return 0 if changed else 1
 
 
+WORKSPACE_GITIGNORE = """\
+# rhkb workspace. If you put this directory under version control, make the
+# repository PRIVATE: wiki/ is compiled from your own work and may name customers.
+#
+# raw/ is fetched copies of Red Hat documentation and upstream repos; it can be
+# regenerated with `rhkb fetch`, so it does not belong in git.
+raw/
+brief.md
+briefs/
+"""
+
+
 def cmd_init(args) -> int:
+    """Create a workspace: raw/, wiki/, your own sources.yaml and the wiki schema."""
+    root = args.root
+    root.mkdir(parents=True, exist_ok=True)
     raw_dir(args).mkdir(parents=True, exist_ok=True)
     ensure_scaffold(wiki_dir(args))
-    print(f"ready: {raw_dir(args)}/ and {wiki_dir(args)}/")
+
+    created = []
+    for name in ("sources.yaml", "CLAUDE.md"):
+        target, template = root / name, BUNDLED_DIR / name
+        if target.exists() or not template.exists() or template.resolve() == target.resolve():
+            continue
+        shutil.copyfile(template, target)
+        created.append(name)
+    gitignore = root / ".gitignore"
+    if not gitignore.exists() and not in_code_repo(root):
+        gitignore.write_text(WORKSPACE_GITIGNORE, encoding="utf-8")
+        created.append(".gitignore")
+
+    print(f"workspace: {root.resolve()}")
+    print(f"  raw/ and wiki/ ready" + (f"; created {', '.join(created)}" if created else "; nothing to copy"))
+    if in_code_repo(root):
+        warn_if_in_code_repo(root)
+    elif not os.environ.get("RHKB_HOME"):
+        print(f"\nmake this the default so you can run rhkb from anywhere:\n"
+              f"  export RHKB_HOME={root.resolve()}")
+    print(f"\nopen your agent here, not in the code repo:\n  cd {root.resolve()} && claude")
     return 0
 
 
@@ -215,6 +311,7 @@ def cmd_guides(args) -> int:
 
 
 def cmd_fetch(args) -> int:
+    warn_if_in_code_repo(args.root)
     catalog = load(args)
     sources = catalog.select(args.source)
     if not sources:
@@ -298,6 +395,7 @@ def cmd_plan(args) -> int:
 
 
 def cmd_next(args) -> int:
+    warn_if_in_code_repo(args.root)
     catalog = load(args)
     units = collect_units(args, catalog)
     if not units:
@@ -346,6 +444,7 @@ def _resolve_ids(state: State, units: List[Unit], ids: Sequence[str]) -> List[Un
 
 
 def cmd_done(args) -> int:
+    warn_if_in_code_repo(args.root)
     catalog = load(args)
     units = collect_units(args, catalog, sources=catalog.sources)
     state = State(args.root)
