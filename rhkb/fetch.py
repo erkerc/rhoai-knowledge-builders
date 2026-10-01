@@ -18,7 +18,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .catalog import Source
-from .html2md import make_soup, page_title, to_markdown
+from .html2md import make_soup, nav_leak_count, page_title, to_markdown, trim_to_title
 from .util import LOG, est_tokens, frontmatter, sha256_text, slug, write_atomic
 
 DOC_ROOT = "https://docs.redhat.com/en/documentation"
@@ -30,6 +30,22 @@ GUIDE_RE = re.compile(
     r"/documentation/(?P<product>[a-z0-9_.\-]+)/(?P<version>[^/#?]+)/html(?:-single)?/(?P<slug>[^/#?]+)",
     re.IGNORECASE,
 )
+# Newer products (Automation Orchestrator) publish one page per topic directly
+# under the version instead of under /html/<guide>/:
+#     /documentation/<product>/<version>/<section>-<topic>
+TOPIC_RE = re.compile(
+    r"/documentation/(?P<product>[a-z0-9_.\-]+)/(?P<version>[^/#?]+)/"
+    r"(?P<slug>[a-z0-9][a-z0-9_.\-]*)/?(?:[#?]|$)",
+    re.IGNORECASE,
+)
+#: Path segments that are page formats, not topics.
+NON_TOPIC_SEGMENTS = {"html", "html-single", "pdf", "epub", "index", "topics", "all"}
+#: Pages that describe how to download the PDF rather than being documentation.
+NON_TOPIC_PREFIXES = ("download_pdf-",)
+#: A converted page with this many bare self-links is probably carrying the nav tree.
+NAV_LEAK_WARN = 12
+SECTION_LABELS = {"whats_new": "What's new"}
+
 SKIP_SLUGS = {"index", "legal-notice", "making-open-source-more-inclusive"}
 TEXT_SUFFIXES = {".md", ".adoc", ".markdown", ".mdx", ".rst", ".txt", ".yaml", ".yml"}
 
@@ -147,17 +163,54 @@ def resolve_version(sess: requests.Session, product: str, version: str) -> Tuple
     return resolved, display
 
 
-def list_guides(sess: requests.Session, product: str, version: str) -> List[str]:
+def list_guides(sess: requests.Session, product: str, version: str) -> Dict[str, str]:
+    """slug -> page style, for everything this product version publishes.
+
+    Style is "html-single" for the classic /html/<guide>/ layout, or "topic" for
+    products that publish individual pages under the version. A product uses one
+    or the other; topic-style links are only considered when no classic guide
+    links exist, so existing products behave exactly as before.
+    """
     soup: BeautifulSoup = make_soup(get_html(sess, f"{DOC_ROOT}/{product}/{version}", timeout=30))
-    slugs: List[str] = []
+    classic: List[str] = []
+    topics: List[str] = []
     for anchor in soup.find_all("a", href=True):
-        match = GUIDE_RE.search(anchor["href"])
-        if not match or match.group("product").lower() != product.lower():
+        href = anchor["href"]
+        match = GUIDE_RE.search(href)
+        if match:
+            guide = match.group("slug")
+            if (match.group("product").lower() == product.lower()
+                    and guide.lower() not in SKIP_SLUGS and guide not in classic):
+                classic.append(guide)
             continue
-        guide = match.group("slug")
-        if guide.lower() not in SKIP_SLUGS and guide not in slugs:
-            slugs.append(guide)
-    return sorted(slugs)
+        topic = TOPIC_RE.search(href)
+        if not topic or topic.group("product").lower() != product.lower():
+            continue
+        if topic.group("version") != version:
+            continue
+        slug_ = topic.group("slug")
+        if (slug_.lower() in NON_TOPIC_SEGMENTS or slug_.lower() in SKIP_SLUGS
+                or slug_.lower().startswith(NON_TOPIC_PREFIXES) or slug_ in topics):
+            continue
+        topics.append(slug_)
+
+    if classic:
+        return {g: "html-single" for g in sorted(classic)}
+    return {g: "topic" for g in sorted(topics)}
+
+
+def guide_url(product: str, version: str, guide: str, style: str) -> str:
+    if style == "topic":
+        return f"{DOC_ROOT}/{product}/{version}/{guide}"
+    return f"{DOC_ROOT}/{product}/{version}/html-single/{guide}/index"
+
+
+def section_of(guide: str, style: str) -> str:
+    """'install-install_with_aapctl' -> 'Install'. Topic pages only."""
+    if style != "topic" or "-" not in guide:
+        return ""
+    prefix = guide.split("-", 1)[0]
+    return SECTION_LABELS.get(prefix, prefix.replace("_", " ").capitalize())
 
 
 def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Session] = None,
@@ -166,7 +219,8 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
     version, display = resolve_version(sess, source.product, source.version)
     LOG.info("[%s] %s %s", source.id, display, version)
 
-    guides = list_guides(sess, source.product, version)
+    found = list_guides(sess, source.product, version)
+    guides = list(found)
     if source.include:
         wanted = [g for g in guides if g in source.include]
         missing = [g for g in source.include if g not in guides]
@@ -175,16 +229,20 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
         guides = wanted
     if limit:
         guides = guides[:limit]
-    LOG.info("[%s] %d guide(s)", source.id, len(guides))
+    topic_pages = any(found[g] == "topic" for g in guides)
+    LOG.info("[%s] %d guide(s)%s", source.id, len(guides), " (topic pages)" if topic_pages else "")
 
     written: List[Path] = []
     for guide in guides:
-        url = f"{DOC_ROOT}/{source.product}/{version}/html-single/{guide}/index"
+        style = found[guide]
+        url = guide_url(source.product, version, guide, style)
         try:
             html = get_html(sess, url)
             soup = make_soup(html)
             title = page_title(soup) or guide.replace("_", " ").title()
             body = to_markdown(html)
+            if style == "topic":
+                body = trim_to_title(body, title)
         except (FetchError, requests.RequestException) as exc:
             LOG.warning("[%s] %s: %s", source.id, guide, exc)
             continue
@@ -197,11 +255,18 @@ def fetch_redhat_docs(source: Source, out_dir: Path, sess: Optional[requests.Ses
             LOG.warning("[%s] %s: extracted almost nothing, skipping", source.id, guide)
             continue
 
+        leaked = nav_leak_count(body, f"/{source.product}/{version}/")
+        if leaked >= NAV_LEAK_WARN:
+            LOG.warning("[%s] %s: %d bare links into the same product - navigation may be "
+                        "leaking into the page; check the file before ingesting",
+                        source.id, guide, leaked)
+
         head = frontmatter({
             "source": source.id,
             "kind": "product-docs",
             "product": display,
             "version": version,
+            "section": section_of(guide, style),
             "title": title,
             "url": url,
             "tokens": est_tokens(body),

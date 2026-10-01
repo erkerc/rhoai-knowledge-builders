@@ -17,6 +17,9 @@ from .util import LOG, est_tokens, human_tokens, setup_logging
 from .wiki import append_log, build_brief, ensure_scaffold, pack_session, read_index
 
 EPILOG = """\
+Run as `python -m rhkb <command>` from the repo root, or define the shell
+function described in the README and type `rhkb <command>` from anywhere.
+
 typical flow:
   rhkb sources                     # what is available, what is on
   rhkb enable vllm kserve          # pick what you want
@@ -128,12 +131,13 @@ def cmd_sources(args) -> int:
     if args.json:
         print(json.dumps([s.__dict__ for s in catalog.sources], indent=2))
         return 0
-    print(f"{'id':22} {'kind':5} {'tier':9} {'on':3} label")
-    print("-" * 78)
+    width = max([22] + [len(s.id) for s in catalog.sources])
+    print(f"{'id':{width}} {'kind':5} {'tier':9} {'on':3} label")
+    print("-" * (width + 56))
     for tier in ("core", "platform", "upstream", "extra"):
         for source in [s for s in catalog.sources if s.tier == tier]:
             mark = "yes" if source.enabled else ""
-            print(f"{source.id:22} {source.kind_label:5} {source.tier:9} {mark:3} {source.label}")
+            print(f"{source.id:{width}} {source.kind_label:5} {source.tier:9} {mark:3} {source.label}")
     on = len(catalog.enabled())
     print(f"\n{on} of {len(catalog.sources)} enabled. "
           f"rhkb enable <id> ... / rhkb disable <id> ...")
@@ -182,7 +186,8 @@ def cmd_guides(args) -> int:
                 status = 2
                 continue
 
-            print(f"\n# {source.id}: {display} {version} - {len(guides)} guide(s)")
+            style = " (topic pages)" if "topic" in guides.values() else ""
+            print(f"\n# {source.id}: {display} {version} - {len(guides)} guide(s){style}")
             if not guides:
                 print("#   none found - check `product:` in sources.yaml against the docs URL")
                 status = 2

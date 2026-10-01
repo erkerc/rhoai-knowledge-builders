@@ -75,7 +75,20 @@ class BrowserSession:
         from playwright.sync_api import sync_playwright
 
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        try:
+            self._browser = self._pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        except Exception as exc:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+            if "executable doesn't exist" in str(exc).lower() or "playwright install" in str(exc).lower():
+                raise BrowserUnavailable(
+                    "the playwright package is installed but its Chromium build is not - "
+                    "run once:  python -m playwright install chromium"
+                ) from exc
+            raise
         self._context = self._browser.new_context(viewport={"width": 1280, "height": 1600})
         self._page = self._context.new_page()
 

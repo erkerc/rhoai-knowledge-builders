@@ -37,37 +37,94 @@ it at Claude Code, it updates the wiki, you mark the units done, you repeat.
 ```bash
 git clone https://github.com/erkerc/rhoai-knowledge-builders.git
 cd rhoai-knowledge-builders
-pip install -r requirements.txt      # or: pip install -e .
+pip install -r requirements.txt
+python -m playwright install chromium    # one-time; see below
 ```
+
+Playwright is a hard requirement because `docs.redhat.com` rejects plain HTTP clients with a
+403 (details under [When fetching is refused](#when-fetching-is-refused-403)). `pip` installs
+the Playwright *package* but not the Chromium build it drives, which is why the second command
+exists. It cannot go in `requirements.txt`, since `pip` only reads package names from that file.
+If you skip it, `rhkb fetch` fails with a message that says to run it.
+
+Use `python -m playwright ...` rather than a bare `playwright ...` so the browser is installed
+for the same interpreter you run rhkb with.
+
+## Running rhkb
+
+Every example in this README is written as `python -m rhkb <command>`, run from the repo root.
+That needs no installation beyond the steps above.
+
+Typing that every time gets old. Two ways to shorten it to `rhkb <command>`:
+
+**A shell function** (works without installing the package, from any directory). Add to
+`~/.zshrc` (the macOS default) or `~/.bashrc`, adjusting the path:
+
+```bash
+rhkb() {
+  ( cd "$HOME/working/rhoai-knowledge-builders" && \
+    PYTHONPATH="$HOME/working/rhoai-knowledge-builders" python -m rhkb "$@" )
+}
+```
+
+```bash
+source ~/.zshrc
+type rhkb          # should say: rhkb is a shell function
+rhkb sources
+```
+
+It is a function rather than an `alias` because it has to `cd` into the project (rhkb reads
+`sources.yaml` and writes `raw/` and `wiki/` relative to it) and forward arguments with `"$@"`.
+An `alias` can't do either cleanly, and a stale `alias rhkb=...` left in your rc file will
+shadow the function, so delete any old one and run `unalias rhkb` in open terminals.
+
+Because the command runs in a subshell, a shell redirect such as `rhkb next > brief.md` writes
+`brief.md` into the directory you are standing in, not the project. Use `--out` to be explicit:
+
+```bash
+rhkb next --out ~/working/rhoai-knowledge-builders/brief.md
+```
+
+**Or install the package**, which gives a real `rhkb` executable:
+
+```bash
+pip install -e .
+rhkb sources
+```
+
+That is simpler, but the command only exists in the Python environment you installed into, so
+activate the same virtualenv first.
+
+Hints printed by rhkb itself (for example "run `rhkb fetch` first") use the short form.
 
 ## Workflow
 
 ```bash
-rhkb sources                 # what is available, what is on
-rhkb enable trustyai kuberay # pick what you want
-rhkb disable ocp             # skip what you don't
-rhkb fetch                   # pull enabled sources into raw/
-rhkb plan                    # how much material, how many sessions
-rhkb next > brief.md         # one context-sized ingest brief
+python -m rhkb sources                 # what is available, what is on
+python -m rhkb enable trustyai kuberay # pick what you want
+python -m rhkb disable ocp             # skip what you don't
+python -m rhkb fetch                   # pull enabled sources into raw/
+python -m rhkb plan                    # how much material, how many sessions
+python -m rhkb next > brief.md         # one context-sized ingest brief
 # ... hand brief.md to your agent, it updates wiki/ ...
-rhkb done <unit-ids>         # mark them off
-rhkb status
+python -m rhkb done <unit-ids>         # mark them off
+python -m rhkb status
 ```
 
 Guide slugs change between releases, so check before pinning an `include:` list:
 
 ```bash
-rhkb guides --source rhoai          # what this version actually publishes
-rhkb guides --source rhoai --yaml   # ready to paste into sources.yaml
+python -m rhkb guides --source rhoai          # what this version actually publishes
+python -m rhkb guides --source rhoai --yaml   # ready to paste into sources.yaml
 ```
 
 Fetch a subset without touching the catalog:
 
 ```bash
-rhkb fetch --source kserve,vllm
-rhkb fetch --source core          # tier: core | platform | upstream | extra
-rhkb fetch --source repo          # every repo source
-rhkb fetch --limit 5 --dry-run    # trial run
+python -m rhkb fetch --source kserve,vllm
+python -m rhkb fetch --source core          # tier: core | platform | upstream | extra
+python -m rhkb fetch --source repo          # every repo source
+python -m rhkb fetch --limit 5 --dry-run    # trial run
 ```
 
 ## What's in the catalog
@@ -87,8 +144,9 @@ Models-as-a-Service, and the NFD operator. These carry the CRD fields, flags and
 the product docs only summarise — the details you need when a customer's InferenceService
 will not come up.
 
-**extra** — TrustyAI, Data Science Pipelines, KubeRay, Llama Stack operator, ODH Dashboard.
-Off by default.
+**extra** — TrustyAI, Data Science Pipelines, KubeRay, Llama Stack operator, ODH Dashboard. Off by default.
+
+**automation-orchestrator** — Red Hat Ansible Automation Platform automation orchestrator, pinned to 2026.8. It is the one `extra` source that is on. It publishes about 70 task-based topic pages (`/2026.8/install-install_with_aapctl`) rather than `/html/<guide>/` books, so rhkb saves one markdown file per page and records its section (Install, Develop, Configure, …) in the frontmatter. Narrow it with `python -m rhkb guides --source automation-orchestrator --yaml`.
 
 Editing the catalog is the intended way to work. Add any `docs.redhat.com` product or any
 git repo in a few lines; `rhkb enable` / `disable` flip entries in place without disturbing
@@ -111,7 +169,7 @@ full browser header set, and on a 403 it opens the site once in headless Chrome,
 clearance cookies into the HTTP session and retries — after which normal requests work.
 
 ```bash
-pip install playwright && playwright install chromium   # then re-run rhkb fetch
+python -m playwright install chromium    # if you have not already; then re-run `python -m rhkb fetch`
 ```
 
 `--browser-fallback off` disables the escalation; `--browser-engine selenium` picks the
@@ -138,9 +196,9 @@ stays `done`. `rhkb next` picks up the changes. A 3.5 → 3.6 bump costs you the
 the corpus.
 
 ```bash
-rhkb fetch --source rhoai    # after a release
-rhkb status                  # "12 unit(s) changed upstream since ingest"
-rhkb next
+python -m rhkb fetch --source rhoai    # after a release
+python -m rhkb status                  # "12 unit(s) changed upstream since ingest"
+python -m rhkb next
 ```
 
 `rhkb skip <id>` retires a unit that isn't worth compiling; `rhkb reset <prefix> --yes`

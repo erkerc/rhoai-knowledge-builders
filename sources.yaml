@@ -124,6 +124,27 @@ sources:
       Diffable across releases - branch per version (enterprise-4.22).
       Prefer this over scraping when you care about what changed.
 
+  # ------------------------------------------------------- topic-page docs ----
+  # Unlike the AI products, this one publishes ~70 task-based topic pages
+  # (/2026.8/install-install_with_aapctl) rather than /html/<guide>/ books, so
+  # rhkb saves one markdown file per page and records its section (Install,
+  # Develop, Configure, ...) in the frontmatter.
+  #
+  # Pinned to the version you pointed at. Releases are year.month, so to follow
+  # the newest one set `version: latest`, or bump it by hand.
+  - id: automation-orchestrator
+    type: redhat-docs
+    tier: extra
+    enabled: true
+    label: Red Hat Ansible Automation Platform - automation orchestrator
+    product: automation_orchestrator
+    version: "2026.8"
+    include: []
+    note: >
+      Index: https://docs.redhat.com/en/documentation/automation_orchestrator/2026.8
+      Narrow with `rhkb guides --source automation-orchestrator --yaml` and an
+      include: list, e.g. only the install-* and troubleshoot-* pages.
+
   # ------------------------------------------------------------ upstream ----
   - id: kserve
     type: repo

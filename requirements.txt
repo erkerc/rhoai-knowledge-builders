@@ -1,7 +1,13 @@
 requests>=2.31
 beautifulsoup4>=4.12
 PyYAML>=6.0
-lxml>=5.0          # optional, faster and more forgiving HTML parsing
+lxml>=5.0          # faster, more forgiving HTML parsing
+playwright>=1.44   # headless browser for docs.redhat.com, which 403s plain HTTP clients
 
-# Needed only when docs.redhat.com refuses plain HTTP (403):
-# pip install playwright && playwright install chromium
+# pip installs the playwright *package*, not the browser it drives. After
+# `pip install -r requirements.txt`, run this once (pip cannot do it for you):
+#
+#     python -m playwright install chromium
+#
+# Without it, `rhkb fetch` on a docs.redhat.com source fails with a message that
+# says exactly this.

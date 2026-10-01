@@ -228,6 +228,144 @@ def main():
         "<html><body><article><h1>Serving models</h1>" + ("<p>Real documentation text. </p>" * 80)
         + "</article></body></html>", "real"))
 
+    # --- topic-page products (Automation Orchestrator) ----------------------
+    import rhkb.fetch as fetch_mod
+    from rhkb.catalog import Source
+    from rhkb.fetch import guide_url, list_guides, section_of, fetch_redhat_docs
+    from rhkb.html2md import nav_leak_count, page_title, trim_to_title, make_soup
+
+    PRODUCT = "automation_orchestrator"
+    BASE = f"https://docs.redhat.com/en/documentation/{PRODUCT}/2026.8"
+    TOPICS = {
+        "get_started-create_your_first_workflow": "Create your first workflow",
+        "plan-choose_a_deployment_model": "Choose a deployment model",
+        "install-install_with_aapctl": "Install with aapctl",
+        "install-understand_aapctl": "Understand aapctl",
+        "develop-validate_workflows": "Validate workflows",
+        "configure-manage_groups": "Manage groups",
+        "secure-control_access_with_policies_and_roles": "Control access with policies and roles",
+        "observe-monitor_audit_events": "Monitor audit events",
+        "troubleshoot-troubleshoot_workflow_runs_ref": "Troubleshoot workflow runs",
+        "whats_new-automation_orchestrator_release_notes": "Release notes",
+    }
+    PRODUCT_NAME = "Red Hat Ansible Automation Platform \u2014 automation orchestrator"
+    nav_items = "".join(f'<li><a href="{BASE}/{slug_}">{name}</a></li>' for slug_, name in TOPICS.items())
+
+    index_html = (
+        f"<html><head><title>{PRODUCT_NAME} | 2026.8 | Red Hat Documentation</title></head><body>"
+        f"<ul>{nav_items}</ul>"
+        f'<a href="{BASE}/install-install_with_aapctl#install-with-aapctl">dup with anchor</a>'
+        f'<a href="{BASE}/download_pdf-automation_orchestrator_2026_8_pdf_reference">PDF page</a>'
+        '<a href="https://developers.redhat.com/api-catalog/api/automation-orchestrator">REST API</a>'
+        '<a href="https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.7">AAP 2.7</a>'
+        f'<a href="https://docs.redhat.com/en/documentation/{PRODUCT}/2026.7/install-old_version">old</a>'
+        "</body></html>")
+
+    def topic_html(slug_, title):
+        other = next(k for k in TOPICS if k != slug_)
+        return (
+            f"<html><head><title>{PRODUCT_NAME} | 2026.8 | {title} | Red Hat Documentation</title></head><body>"
+            f"<article>"
+            f"<div><h1>{PRODUCT_NAME}</h1><p>Install</p><ul>{nav_items}</ul></div>"
+            f"<div><h2>{PRODUCT_NAME}</h2><p>Develop</p><ul>{nav_items}</ul></div>"
+            f"<h1>{title}</h1>"
+            f"<p>{title} explains how this part of the product works. " + "Detailed explanatory text. " * 40 + "</p>"
+            "<p><strong>Procedure</strong></p>"
+            "<pre><code>oc get automationorchestrator -n aao</code></pre>"
+            f'<p>Additional resources</p><ul><li><a href="{BASE}/{other}">Related topic</a></li></ul>'
+            "</article></body></html>")
+
+    def fake_get_html(sess, url, timeout=60):
+        from rhkb.fetch import FetchError
+        if url.rstrip("/") in (BASE, f"https://docs.redhat.com/en/documentation/{PRODUCT}"):
+            return index_html
+        for slug_, name in TOPICS.items():
+            if url == f"{BASE}/{slug_}":
+                return topic_html(slug_, name)
+        raise FetchError(f"HTTP 404 for {url}")
+
+    original_get_html = fetch_mod.get_html
+    fetch_mod.get_html = fake_get_html
+    try:
+        found = list_guides(None, PRODUCT, "2026.8")
+        ok &= check("topic pages are discovered", set(found) == set(TOPICS), sorted(set(found) ^ set(TOPICS)))
+        ok &= check("they are classified as topic pages", set(found.values()) == {"topic"})
+        ok &= check("the PDF-download page, other products, other versions and external links are ignored",
+                    not any(k.startswith("download_pdf") or "old_version" in k for k in found))
+        ok &= check("topic URLs are built directly under the version",
+                    guide_url(PRODUCT, "2026.8", "install-install_with_aapctl", "topic")
+                    == f"{BASE}/install-install_with_aapctl")
+        ok &= check("classic URLs are unchanged",
+                    guide_url("p", "1", "g", "html-single")
+                    == "https://docs.redhat.com/en/documentation/p/1/html-single/g/index")
+        ok &= check("section comes from the slug prefix",
+                    section_of("install-install_with_aapctl", "topic") == "Install"
+                    and section_of("get_started-x", "topic") == "Get started"
+                    and section_of("whats_new-x", "topic") == "What's new"
+                    and section_of("release_notes", "html-single") == "")
+
+        source = Source(id="ao", type="redhat-docs", product=PRODUCT, version="2026.8", include=[])
+        with tempfile.TemporaryDirectory() as tmp:
+            written = fetch_redhat_docs(source, Path(tmp) / "raw", sess=None)
+            ok &= check("one file is written per topic page", len(written) == len(TOPICS), len(written))
+            titles = []
+            for path in written:
+                fields, body = split_frontmatter(path.read_text())
+                titles.append(fields.get("title"))
+            ok &= check("every page keeps its own title, not the product name",
+                        len(set(titles)) == len(TOPICS) and PRODUCT_NAME not in titles, titles)
+
+            sample = next(w for w in written if w.name == "install-install-with-aapctl.md")
+            fields, body = split_frontmatter(sample.read_text())
+            ok &= check("frontmatter records the section and pinned version",
+                        fields.get("section") == "Install" and fields.get("version") == "2026.8", fields)
+            ok &= check("navigation is trimmed away",
+                        "Understand aapctl" not in body.replace("Related topic", "")
+                        and f"# {PRODUCT_NAME}" not in body
+                        and nav_leak_count(body, f"/{PRODUCT}/2026.8/") <= 1, body[:300])
+            ok &= check("content, procedure labels and code survive",
+                        "Detailed explanatory text" in body and "**Procedure**" in body
+                        and "oc get automationorchestrator -n aao" in body)
+            ok &= check("a genuine cross-reference is kept", "Related topic" in body)
+
+        # The leak detector must fire on an untrimmed page - that is its whole job.
+        untrimmed = to_markdown(topic_html("install-install_with_aapctl", "Install with aapctl"))
+        ok &= check("an untrimmed page trips the nav-leak detector",
+                    nav_leak_count(untrimmed, f"/{PRODUCT}/2026.8/") >= 12,
+                    nav_leak_count(untrimmed, f"/{PRODUCT}/2026.8/"))
+
+        # Classic products must not be affected by the new link pattern.
+        classic_index = (
+            "<html><head><title>Product | 3.5 | Red Hat Documentation</title></head><body>"
+            '<a href="https://docs.redhat.com/en/documentation/prod/3.5/html/release_notes/index">RN</a>'
+            '<a href="https://docs.redhat.com/en/documentation/prod/3.5/some_stray_page">stray</a>'
+            "</body></html>")
+        fetch_mod.get_html = lambda sess, url, timeout=60: classic_index
+        classic = list_guides(None, "prod", "3.5")
+        ok &= check("classic products keep html-single and ignore topic-looking links",
+                    classic == {"release_notes": "html-single"}, classic)
+    finally:
+        fetch_mod.get_html = original_get_html
+
+    # --- title selection ----------------------------------------------------
+    soup = make_soup(topic_html("install-install_with_aapctl", "Install with aapctl"))
+    ok &= check("page_title skips the product-name h1 in the nav block",
+                page_title(soup) == "Install with aapctl", page_title(soup))
+    classic_soup = make_soup("<html><head><title>Release notes | Red Hat OpenShift AI | 3.5 | "
+                             "Red Hat Documentation</title></head><body><h1>Release notes</h1></body></html>")
+    ok &= check("page_title is unchanged for classic guides", page_title(classic_soup) == "Release notes")
+
+    md_text = "intro nav\n\n# Product\n\nmore nav\n\n# Real title\n\n" + "body text here. " * 30 + "\n"
+    ok &= check("trim_to_title cuts everything before the last matching heading",
+                trim_to_title(md_text, "Real title").startswith("# Real title"))
+    ok &= check("trim_to_title leaves a page alone when the heading is missing",
+                trim_to_title(md_text, "No such title") == md_text)
+    ok &= check("trim_to_title will not reduce a page to almost nothing",
+                trim_to_title("nav\n\n# Real title\n\nhi\n", "Real title") == "nav\n\n# Real title\n\nhi\n")
+    fenced = "```\n# Real title\n```\n\n# Real title\n\n" + "body. " * 60
+    ok &= check("a heading-looking line inside a code fence is ignored",
+                trim_to_title("nav\n\n" + fenced, "Real title").startswith("# Real title\n\nbody"))
+
     # --- catalog ----------------------------------------------------------
     catalog = load_catalog(ROOT / "sources.yaml")
     ok &= check("catalog parses", len(catalog.sources) > 10, len(catalog.sources))
@@ -247,6 +385,10 @@ def main():
     ok &= check("no source ships a guessed include list for a fast-moving product",
                 catalog.by_id("rhoai").include == [],
                 catalog.by_id("rhoai").include)
+    ao = catalog.by_id("automation-orchestrator")
+    ok &= check("automation-orchestrator is pinned to the requested version and enabled",
+                ao is not None and ao.product == "automation_orchestrator"
+                and ao.version == "2026.8" and ao.enabled, ao)
     ok &= check("tier selection works",
                 {s.id for s in catalog.select(["core"])} >= {"rhoai", "rhcl"})
     ok &= check("'repo' selects only repos",

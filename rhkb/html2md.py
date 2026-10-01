@@ -34,13 +34,96 @@ def make_soup(html: str) -> BeautifulSoup:
         return BeautifulSoup(html, "html.parser")
 
 
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+VERSION_ONLY_RE = re.compile(r"\d+(\.\d+)*(\.x)?")
+PURE_LINK_RE = re.compile(r"^\s*(?:[-*]|\d+\.)\s+\[[^\]]+\]\(([^)\s]+)\)\s*$")
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().casefold()
+
+
+def _title_segments(soup: BeautifulSoup) -> List[str]:
+    """The meaningful parts of <title>: no site name, no bare version."""
+    raw = soup.title.string if soup.title and soup.title.string else ""
+    segments: List[str] = []
+    for part in raw.split("|"):
+        part = re.sub(r"\s+", " ", part).strip()
+        if not part or "red hat documentation" in part.lower():
+            continue
+        if VERSION_ONLY_RE.fullmatch(part):
+            continue
+        segments.append(part)
+    return segments
+
+
 def page_title(soup: BeautifulSoup) -> str:
-    heading = soup.find("h1")
-    if heading and heading.get_text(strip=True):
-        return heading.get_text(" ", strip=True)
-    if soup.title and soup.title.string:
-        return soup.title.string.split("|")[0].strip()
-    return ""
+    """The document's own title.
+
+    Not simply the first <h1>: on the newer topic-page products the first <h1>
+    is the *product* name inside the navigation block, so every page would get
+    the same title. The right heading is the last <h1> that <title> also names;
+    otherwise fall back to the first <h1>, then to the first <title> segment.
+    """
+    known = {_norm(s) for s in _title_segments(soup)}
+    headings = [re.sub(r"\s+", " ", h.get_text(" ", strip=True)) for h in soup.find_all("h1")]
+    headings = [h for h in headings if h]
+    for text in reversed(headings):
+        if _norm(text) in known:
+            return text
+    if headings:
+        return headings[0]
+    segments = _title_segments(soup)
+    return segments[0] if segments else ""
+
+
+def trim_to_title(md: str, title: str, min_keep: int = 200) -> str:
+    """Drop everything before the last `# <title>` heading.
+
+    On topic pages the navigation tree, breadcrumbs and a second copy of the
+    tree all come *before* the page's own heading, so cutting there removes
+    them without having to guess at CSS classes. Left untouched when the
+    heading is not found, or when cutting would leave almost nothing.
+    """
+    wanted = _norm(title)
+    if not wanted:
+        return md
+    lines = md.splitlines()
+    in_fence = False
+    cut: Optional[int] = None
+    for index, line in enumerate(lines):
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = re.match(r"^#\s+(.+?)\s*$", line)
+        if match and _norm(match.group(1)) == wanted:
+            cut = index
+    if not cut:
+        return md
+    kept = "\n".join(lines[cut:]).strip() + "\n"
+    return kept if len(kept) >= min_keep else md
+
+
+def nav_leak_count(md: str, marker: str) -> int:
+    """Lines that are nothing but a link into the same product and version.
+
+    A converted page with a dozen of these is almost certainly carrying the
+    site's navigation tree, which would be repeated in every ingest brief.
+    """
+    count = 0
+    in_fence = False
+    for line in md.splitlines():
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = PURE_LINK_RE.match(line)
+        if match and marker in match.group(1):
+            count += 1
+    return count
 
 
 def _is_decomposed(node: Tag) -> bool:

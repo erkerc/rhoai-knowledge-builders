@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rhoai-knowledge-builders"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compile Red Hat AI docs and upstream repos into an LLM-maintained wiki"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -15,11 +15,11 @@ dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
     "PyYAML>=6.0",
+    "playwright>=1.44",
 ]
 
 [project.optional-dependencies]
 fast = ["lxml>=5.0"]
-browser = ["playwright>=1.44"]
 
 [project.urls]
 Homepage = "https://github.com/erkerc/rhoai-knowledge-builders"
